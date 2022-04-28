@@ -1,141 +1,96 @@
 import matplotlib.pyplot as plt
-from numpy.random import default_rng
+from datetime import datetime
+from scipy.stats import norm
 import numpy as np
-import collections
-from scipy import interpolate
+from numpy.polynomial import polynomial
+import json
 
-import random
-
-random.choice([-1, 1])
+from model import Market, plot_return_distribution
+from settings import Settings
+from analyze import multi_analyze_results, analyze_results
 
 
 def main():
-    market = Market()
-    market.run()
+    start_time = datetime.now()
+
+    optimize(50, 2, 3, 0.05)
+
+    print("-" * 30)
+    print(f"FINISHED in {datetime.now() - start_time}")
 
 
-class Market:
-    def __init__(self):
-        self.share_price = []
-        self.risk_free_rate = 0.015
-        self.dividend = []
-
-        self.agents = []
-        self.orders = []
-
-    def __str__(self):
-        return "Market()"
-
-    def initialize_market(self):
-        self.share_price = [100]
-        self.dividend = [5]
-
-        self.agents = [Agent(self, i, 200, 1) for i in range(100)]
-
-    def update(self, time):
-        self.share_price.append(self.share_price[0])
-        self.dividend.append(self.dividend[0])
-
-    def final(self):
-        plt.plot(self.agents[0].wealth)
-        plt.show()
-
-    def market_clearing(self):
-        buy_orders = [i for i in self.orders if i > 0]
-        sell_orders = [i for i in self.orders if i < 0]
-
-        # Make sell order sign positive
-        for i in sell_orders:
-            sell_orders[sell_orders.index(i)] = i * -1
-
-        buy_order_frequency = collections.Counter(buy_orders)
-        buy_order_frequency = collections.OrderedDict(reversed(sorted(buy_order_frequency.items())))
-
-        sell_order_frequency = collections.Counter(sell_orders)
-        sell_order_frequency = collections.OrderedDict(sorted(sell_order_frequency.items()))
-
-        supply = {}
-        cumulative_supply = 0
-        for i in sell_order_frequency:
-            cumulative_supply = sell_order_frequency[i] + cumulative_supply
-            supply[i] = cumulative_supply
-
-        demand = {}
-        cumulative_demand = 0
-        for i in buy_order_frequency:
-            cumulative_demand = buy_order_frequency[i] + cumulative_demand
-            demand[i] = cumulative_demand
-        plt.plot(demand.keys(), demand.values(), label="Demand")
-        plt.plot(supply.keys(), supply.values(), label="Supply")
-        plt.legend()
-
-        interpolated_supply = interpolate.interp1d(list(supply.keys()), list(supply.values()))
-        interpolated_demand = interpolate.interp1d(list(demand.keys()), list(demand.values()))
-
-        # TODO: Optimize: Directed Walk with expected Value
-        difference = {}
-        for i in list(np.arange(90, 110, 0.1)):
-            try:
-                difference[i] = abs(interpolated_supply(i) - interpolated_demand(i))
-            except ValueError:
-                pass
-        print(list(difference.keys())[list(difference.values()).index(min(difference.values()))])
-        plt.show()
-
-    def run(self):
-        self.initialize_market()
-        for time in range(1):
-            self.orders = []
-            for agent in self.agents:
-                agent.order(time)
-
-            self.market_clearing()
-            self.update(time)
-
-            for agent in self.agents:
-                agent.update(time)
-
-        # self.final()
+def optimize(runs, start, end, step):
+    for i in list(np.arange(start, end, step)):
+        i = float(i)
+        _settings = Settings(periods=23673, number_agents=50, initial_share_price=100, risk_free_rate=0.015,
+                             dividend=5, initial_cash=1000, initial_shares=1, std=i)
+        multi_run("{:.2f}".format(i), runs, _settings)
 
 
-class Agent:
-    def __init__(self, market: Market, index, cash, number_shares):
-        self.market = market
-        self.index = index
-        self.cash = [float(cash)]
-        self.number_shares = [int(number_shares)]
-        self.wealth = [float(self.cash[0] + self.number_shares[0] * self.market.share_price[0])]
-        self.equity = [float(self.wealth[0] - self.cash[0])]
+def spx():
+    with open("spx/spx_results.json", "r") as f:
+        results = json.load(f)
 
-    def update(self, time):
-        self.number_shares.append(self.number_shares[0])
+    mu = results["mu"]
+    std = results["std"]
+    skew = results["skew"]
+    kurtosis = results["kurtosis"]
+    daily_returns = results["daily_returns"]
+    raw_acf = results["raw_acf"]
+    squared_acf = results["squared_acf"]
+    absolute_acf = results["absolute_acf"]
 
-        # Variate of Equation 13
-        self.cash.append((1 + self.market.risk_free_rate) * self.cash[time - 1])
-        self.wealth.append(self.cash[time] + self.market.share_price[time] * self.number_shares[time])
-        self.equity.append(self.wealth[time] - self.cash[time])
-        return self.cash, self.wealth
+    # 0.0003061881281387075 0.011964309127722885 -0.12028614737963762 17.517850200685995
+    print(mu, std, skew, kurtosis)
 
-    def order(self, time):
-        rng = default_rng()
-        mean, standard_deviation = 100, 10
+    fig, ax = plt.subplots(1, 1)
 
-        # 1 = Buy; -1 = Sell
-        order_type = random.choice([-1, 1])
-        order = round(rng.normal(mean, standard_deviation, 1)[0], 0) * order_type
+    raw_acf_coefficients = polynomial.polyfit(range(1, len(raw_acf) + 1), raw_acf, 9)
+    raw_acf_model = polynomial.Polynomial(raw_acf_coefficients)
 
-        # Check if agent meets conditions to execute the order
-        if order_type == 1:
-            if order > self.cash[time - 1]:
-                return
-        else:
-            if self.number_shares == 0:
-                return
+    squared_acf_coefficients = polynomial.polyfit(range(1, len(squared_acf) + 1), squared_acf, 9)
+    squared_acf_model = polynomial.Polynomial(squared_acf_coefficients)
 
-        self.market.orders.append(order)
+    absolute_acf_coefficients = polynomial.polyfit(range(1, len(absolute_acf) + 1), absolute_acf, 9)
+    absolute_acf_model = polynomial.Polynomial(absolute_acf_coefficients)
 
-    def __str__(self):
-        return str(str(self.__dict__))
+    plt.plot(raw_acf, label="raw")
+    plt.plot(raw_acf_model(range(1, len(raw_acf) + 1)), label="raw model", color="grey")
+
+    plt.plot(squared_acf, label="squared")
+    plt.plot(squared_acf_model(range(1, len(squared_acf) + 1)), label="squared model", color="grey")
+
+    plt.plot(absolute_acf, label="absolute")
+    plt.plot(absolute_acf_model(range(1, len(absolute_acf) + 1)), label="absolute model", color="grey")
+
+    plt.xlabel("lag")
+    plt.ylabel("autocorrelation")
+    plt.legend()
+    plt.show()
+
+    # plot_return_distribution(ax, daily_returns, mu, std, skew, kurtosis, title=False)
+    # plt.savefig("images/spx_autocorrelation.png", dpi=600)
+
+
+def multi_run(_name, _number_runs, _settings):
+    results = {
+        "settings": _settings.__dict__,
+        "results": []
+    }
+
+    for i in range(1, _number_runs + 1):
+        start_time = datetime.now()
+
+        market = Market(_settings)
+        result = market.run()
+        results["results"].append(result.copy())
+
+        print("-" * 30)
+        print(f"FINISHED Run {i} in {datetime.now() - start_time}")
+        print("-" * 30)
+
+    with open(f"results/results_{_name}.json", "w") as f:
+        json.dump(results, f, indent=4)
 
 
 if __name__ == "__main__":
